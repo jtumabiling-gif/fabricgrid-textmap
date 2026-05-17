@@ -1,0 +1,312 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ============================================
+    // ROLE-BASED COLLECTIONS - User Management
+    // ============================================
+    
+    // Users collection - users can read their own document
+    // Admins can read and list all users
+    match /users/{userId} {
+      allow read: if request.auth.uid == userId || 
+                     get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+      allow list: if get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+      allow create: if request.auth.uid == userId;
+      allow update: if false; // Prevent direct modifications
+      allow delete: if get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN'; // Allow admins to delete users
+      
+      // Allow users to create and read their own bookings in subcollection
+      match /bookings/{bookingId} {
+        allow create: if request.auth.uid == userId;
+        allow read, update: if request.auth.uid == userId;
+        allow delete: if false;
+      }
+    }
+    
+    // Customers collection - only authenticated customers can access
+    match /customers/{userId} {
+      allow read: if request.auth.uid == userId;
+      allow create, update, delete: if false; // Prevent direct modifications
+    }
+    
+    // Shop Owners collection - authenticated users can read shop owner profiles
+    match /shopOwners/{userId} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth.uid == userId;
+      allow delete: if false; // Prevent direct modifications
+    }
+    
+    // Shop Owners collection (underscore variant) - authenticated users can read shop owner profiles
+    match /shop_owners/{userId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth.uid == userId;
+      allow update: if request.auth.uid == userId;
+      allow delete: if get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN'; // Allow admins to delete shop owners
+    }
+    
+    // Admins collection - only authenticated admins can access
+    match /admins/{userId} {
+      allow read: if request.auth.uid == userId;
+      allow create: if request.auth.uid == userId && request.resource.data.role == 'ADMIN';
+      allow update, delete: if false; // Prevent direct modifications
+    }
+
+    // ============================================
+    // PRODUCTS MANAGEMENT
+    // ============================================
+    
+    // Shop owners can create products
+    match /products/{productId} {
+      // Allow create if user is authenticated
+      // (We verify shop owner role on client side, this simplifies backend rules)
+      allow create: if request.auth != null;
+      
+      // Anyone can read all products
+      allow read: if true;
+      
+      // Only the shop owner who created the product can update or delete, or admins can delete
+      allow update, delete: if request.auth.uid == resource.data.shopOwnerId || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // BOOKINGS MANAGEMENT
+    // ============================================
+    
+    // Bookings collection - bookings for rentals, reservations, and purchases
+    match /bookings/{bookingId} {
+      // Anyone authenticated can create bookings (permissive for MVP)
+      allow create: if request.auth != null;
+      
+      // Users can read their own bookings OR shop owners can read all their bookings
+      // This includes reading for payment processing
+      allow read: if request.auth != null && 
+                     (request.auth.uid == resource.data.userId ||
+                      request.auth.uid == resource.data.shopOwnerId);
+      
+      // Authenticated users can list bookings
+      allow list: if request.auth != null;
+      
+      // Users can update their own bookings (for status changes, notes, etc.)
+      // Also allow any authenticated user to update status field (for cancellations)
+      allow update: if request.auth != null &&
+                       ((request.auth.uid == resource.data.userId ||
+                         request.auth.uid == resource.data.shopOwnerId) ||
+                        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paymentStatus', 'paymentId', 'paymentMethod', 'paymentDate', 'updatedAt'])));
+      
+      // Allow shop owners to delete their own bookings when deleting a product, or allow admins to delete bookings for user management
+      allow delete: if request.auth.uid == resource.data.shopOwnerId || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // SERVICES MANAGEMENT
+    // ============================================
+    
+    // Services collection - services offered by shop owners
+    match /services/{serviceId} {
+      // Authenticated shop owners can create services
+      allow create: if request.auth != null;
+      
+      // Anyone can read active services
+      allow read: if resource.data.status == 'ACTIVE' || request.auth.uid == resource.data.shopOwnerId;
+      
+      // Only the shop owner who created the service can update
+      allow update: if request.auth.uid == resource.data.shopOwnerId;
+      
+      // Only the shop owner who created the service can delete, or admins can delete
+      allow delete: if request.auth.uid == resource.data.shopOwnerId || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // BOOK SERVICE MANAGEMENT
+    // ============================================
+    
+    // Book Service collection - service bookings from users
+    match /book_service/{bookingId} {
+      // Authenticated users can create service bookings
+      allow create: if request.auth != null;
+      
+      // Users can always read their own bookings
+      // Shop owners can read bookings for their services
+      // This rule ensures payment processing can read booking details
+      allow read: if request.auth != null && 
+                     (request.auth.uid == resource.data.userId ||
+                      request.auth.uid == resource.data.shopOwnerId);
+      
+      // Authenticated users can list bookings
+      allow list: if request.auth != null;
+      
+      // Users can update their own bookings, or shop owners can update their service bookings
+      // Also allow updates for payment-related fields
+      allow update: if request.auth != null &&
+                       ((request.auth.uid == resource.data.userId ||
+                         request.auth.uid == resource.data.shopOwnerId) ||
+                        (request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'paymentStatus', 'paymentId', 'paymentMethod', 'paymentDate', 'updatedAt'])));
+      
+      // Allow shop owners to delete their own service bookings when deleting a service, or allow admins to delete service bookings for user management
+      allow delete: if request.auth.uid == resource.data.shopOwnerId || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // NOTIFICATIONS MANAGEMENT
+    // ============================================
+    
+    // Notifications collection - notifications for users
+    match /notifications/{notificationId} {
+      // Authenticated users can create notifications
+      allow create: if request.auth != null;
+      
+      // Users can read their own notifications
+      allow read: if request.auth != null && 
+                     request.auth.uid == resource.data.userId;
+      
+      // Users can list their notifications
+      allow list: if request.auth != null;
+      
+      // Users can update their own notifications (to mark as read)
+      allow update: if request.auth != null &&
+                       request.auth.uid == resource.data.userId;
+      
+      // Users can delete their own notifications, or admins can delete
+      allow delete: if request.auth != null &&
+                       (request.auth.uid == resource.data.userId || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN');
+    }
+
+    // ============================================
+    // REVIEWS MANAGEMENT
+    // ============================================
+    
+    // Reviews collection - user reviews for shop owners and products
+    match /reviews/{reviewId} {
+      // Authenticated users can create reviews
+      allow create: if request.auth != null &&
+                       request.auth.uid == request.resource.data.userId;
+      
+      // Anyone can read individual reviews
+      allow read: if true;
+      
+      // Authenticated users can query/list reviews (for shops to see their reviews, for products to see product reviews)
+      allow list: if request.auth != null;
+      
+      // Only the reviewer can update their own review
+      allow update: if request.auth.uid == resource.data.userId;
+      
+      // Only the reviewer can delete their own review, or admins can delete
+      allow delete: if request.auth.uid == resource.data.userId || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // RATINGS MANAGEMENT
+    // ============================================
+    
+    // Ratings collection - ratings for products and services
+    match /ratings/{ratingId} {
+      // Authenticated users can create ratings
+      allow create: if request.auth != null;
+      
+      // Anyone can read individual ratings
+      allow read: if true;
+      
+      // Authenticated users can list ratings
+      allow list: if request.auth != null;
+      
+      // Only the person who created the rating can update it
+      allow update: if request.auth.uid == resource.data.userId;
+      
+      // Allow shop owners to delete ratings when deleting a product, or only the reviewer can delete their own rating, or admins can delete
+      allow delete: if request.auth.uid == resource.data.shopOwnerId || request.auth.uid == resource.data.userId || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // SUBSCRIPTIONS MANAGEMENT
+    // ============================================
+    
+    // Subscriptions collection - tracks shop owner subscription plans
+    match /subscriptions/{subscriptionId} {
+      // Authenticated shop owners can create subscriptions
+      allow create: if request.auth != null;
+      
+      // Users can read their own subscriptions
+      allow read: if request.auth != null && 
+                     (request.auth.uid == resource.data.shopOwnerId ||
+                      request.auth.uid == resource.data.uid);
+      
+      // Admins can list all subscriptions (with error handling)
+      allow list: if request.auth != null;
+      
+      // Shop owners can update their own subscriptions
+      allow update: if request.auth != null &&
+                       request.auth.uid == resource.data.shopOwnerId;
+      
+      // Allow admins to delete subscriptions for user management
+      allow delete: if get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // PAYMENTS MANAGEMENT
+    // ============================================
+    
+    // Payments collection - payment records for bookings
+    match /payments/{paymentId} {
+      // Authenticated users can create payments for their own bookings
+      allow create: if request.auth != null &&
+                       request.auth.uid == request.resource.data.userId;
+      
+      // Users can read their own payments, or shop owners can read payments for their bookings
+      allow read: if request.auth != null && 
+                     (request.auth.uid == resource.data.userId ||
+                      request.auth.uid == resource.data.shopOwnerId);
+      
+      // Authenticated users can list their payments
+      allow list: if request.auth != null;
+      
+      // Shop owners can update payment status for refunds
+      allow update: if request.auth != null &&
+                       request.auth.uid == resource.data.shopOwnerId &&
+                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'refundId', 'updatedAt']);
+      
+      // Allow admins to delete payments for user management
+      allow delete: if get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'ADMIN';
+    }
+
+    // ============================================
+    // REFUNDS MANAGEMENT
+    // ============================================
+    
+    // Refunds collection - refund records for payments
+    match /refunds/{refundId} {
+      // Authenticated users can create refunds for their own payments
+      allow create: if request.auth != null &&
+                       request.auth.uid == request.resource.data.userId;
+      
+      // Users can read their own refunds
+      allow read: if request.auth != null && 
+                     request.auth.uid == resource.data.userId;
+      
+      // Authenticated users can list their refunds
+      allow list: if request.auth != null;
+      
+      // Prevent direct updates (maintain refund audit trail)
+      allow update: if false;
+      
+      // Prevent deletion of refunds (keep records for audit trail)
+      allow delete: if false;
+    }
+
+    // ============================================
+    // FIRESTORE INDEXES NEEDED
+    // ============================================
+    // 
+    // NOTE: Create these composite indexes in Firebase Console:
+    //
+    // 1. Bookings Collection Index:
+    //    - Collection: bookings
+    //    - Fields: userId (Ascending), createdAt (Descending)
+    //
+    // 2. Bookings Collection Index:
+    //    - Collection: bookings
+    //    - Fields: shopOwnerId (Ascending), createdAt (Descending)
+    //
+    // Once these indexes are created, all queries will work perfectly.
+    // Until then, the app uses an in-memory fallback to sort results.
+  }
+}

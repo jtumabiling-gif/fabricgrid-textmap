@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "371265630051",
+    "project_id": "textmap-ba21b",
+    "storage_bucket": "textmap-ba21b.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:371265630051:android:25c033932bdf5712972d56",
+        "android_client_info": {
+          "package_name": "com.example.fabricgrid"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAr3BdNZK1dti8aIDiD6M9Ihx3vnxb-hSs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
